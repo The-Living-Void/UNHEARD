@@ -1,0 +1,276 @@
+import hypermedia.net.*;
+import dmxP512.*;
+import processing.serial.*;
+
+// UDP udp;  // Create an object for the UDP library
+
+
+int port = 5005;  // The port number should match the Python script
+float x = 0;
+float y = 0;
+boolean rightHand = false;
+float heightHandR = 0;
+
+hypermedia.net.UDP udp;
+
+//dmx
+DmxP512 dmxOutput;
+int universeSize=128;
+boolean DMXPRO=false;
+String DMXPRO_PORT="/dev/tty.usbserial-EN272324";
+int DMXPRO_BAUDRATE=115000;
+
+
+float x1, y1;   // mouse position
+float vx, vy;   
+float maxSpeed  = 2;   // speed threshold
+int[] directionCounts  = new int[4];   // counts for each direction (TopLeft, TopRight, BottomRight, BottomLeft)
+color bgColor;   // background color
+boolean isMoving  = false;   // flag to track if the mouse is moving
+int velocity, velocity1,velocity2,velocity3,velocity4 = 0;
+int direction=0;
+
+void setup() {
+  size(750,750);
+  udp = new hypermedia.net.UDP(this, port);
+  //udp.log(true);  // Enable logging to see incoming messages
+  udp.listen(true);  // Start listening to incoming messages
+
+//dmx
+  dmxOutput=new DmxP512(this,universeSize,false);
+  if(DMXPRO){
+    dmxOutput.setupDmxPro(DMXPRO_PORT,DMXPRO_BAUDRATE);
+  }
+
+  x  = mouseX;
+  y  = mouseY;
+  vx  = 0;
+  vy  = 0;
+  for (int i  = 0; i < directionCounts.length; i++) {
+    directionCounts[i]  = 0;
+  }
+  bgColor  = color(255);   // initial white background
+}
+
+void draw() {
+  // The draw loop is left empty as we're only listening for UDP messages
+  trackVel(x,y);
+  if (DMXPRO) {
+  runDmx();  
+  }
+  
+  // background(bgColor);
+  fill(bgColor,heightHandR);
+  noStroke();
+  rect(0, 0, width, height);
+  fill(0);
+  if (rightHand) {
+  ellipse(x,y,heightHandR,heightHandR);  
+  }else {
+    background(heightHandR);
+  }
+  
+  
+}
+void runDmx(){
+
+  if (velocity1>255) {velocity1=255;}
+  if (velocity2>255) {velocity2=255;}
+  if (velocity3>255) {velocity3=255;}
+  if (velocity4>255) {velocity4=255;}
+
+  if (direction==1) {
+  // dmxOutput.set(1,velocity1);
+  // dmxOutput.set(2,velocity1/2);
+  // dmxOutput.set(3,velocity1);
+  // dmxOutput.set(4,velocity1/2);  
+  }else if (direction==2) {
+    
+    // dmxOutput.set(2,velocity/2);
+    // dmxOutput.set(3,velocity);
+    // dmxOutput.set(4,velocity);  
+  }else if (direction==3) {
+    // dmxOutput.set(1,velocity3);
+    // dmxOutput.set(2,velocity3);
+    // dmxOutput.set(3,velocity3/2);
+    // dmxOutput.set(4,velocity3);  
+  }else if (direction==4) {
+    // dmxOutput.set(1,velocity4);
+    // dmxOutput.set(2,velocity4);
+    // dmxOutput.set(3,velocity4);
+    // dmxOutput.set(4,velocity4/2);  
+  }
+  
+  dmxOutput.set(5,velocity1);
+  dmxOutput.set(6,velocity1);
+  dmxOutput.set(7,velocity1);
+  dmxOutput.set(8,velocity1);  
+  
+  dmxOutput.set(1,velocity4);  
+  dmxOutput.set(2,velocity4);  
+
+  // dmxOutput.set(11,velocity2);
+  dmxOutput.set(11,velocity2);
+  
+}
+
+float lerpAmount = 0.075; // Adjust this value to control the interpolation speed
+
+void trackVel(float x,float y){
+  vx  = (x - x1) / 10.0;
+  vy  = (y - y1) / 10.0;
+  // println(vx);
+  
+  float newVelocity;
+  if (vx > vy) {
+    newVelocity = abs(map(vx, 0, 5, 0, 255));
+  } else {
+    newVelocity = abs(map(vy, 0, 5, 0, 255));
+  }
+
+  velocity = int(lerp(velocity, newVelocity, lerpAmount));
+
+  //shared velocity
+  // check if speed exceeds threshold
+  float speed  = sqrt(sq(vx) + sq(vy));
+  if (speed > maxSpeed) {
+    isMoving  = true;
+    direction  = getCornerDirection(vx, vy);
+    if (direction != 0) {
+      directionCounts[direction - 1]++;
+    }
+  } else if (isMoving && speed < maxSpeed) {
+    mouseStopped();
+    isMoving  = false;
+    velocity--;
+    if (velocity<0) {
+      velocity=0;
+      velocity1=0;
+      velocity2=0;
+      velocity3=0;
+      velocity4=0;
+    }
+  }
+
+    if (direction==1) {
+      
+      velocity1 = velocity;
+
+      velocity2--;
+      if (velocity2<0) {velocity2=0;}
+      velocity3--;
+      if (velocity3<0) {velocity3=0;}
+      velocity4-=0.5;
+      if (velocity4<0) {velocity4=0;}
+
+
+  }else if (direction==2) {
+    
+    velocity2 = velocity;
+
+    velocity1--;
+    if (velocity1<0) {velocity1=0;}
+    velocity3--;
+    if (velocity3<0) {velocity3=0;}
+    velocity4-=0.5;
+    if (velocity4<0) {velocity4=0;}
+
+  }else if (direction==3) {
+    velocity3 = velocity;
+
+    velocity1--;
+    if (velocity1<0) {velocity1=0;}
+    velocity2--;
+    if (velocity2<0) {velocity2=0;}
+    velocity4-=0.5;
+    if (velocity4<0) {velocity4=0;}
+
+  }else if (direction==4) {
+    velocity4 = velocity*2;
+
+    velocity1--;
+    if (velocity1<0) {velocity1=0;}
+    velocity2--;
+    if (velocity2<0) {velocity2=0;}
+    velocity3--;
+    if (velocity3<0) {velocity3=0;}
+  }else if (direction==0) {
+    velocity1--;
+    if (velocity1<0) {velocity1=0;}
+    velocity2--;
+    if (velocity2<0) {velocity2=0;}
+    velocity3--;
+    if (velocity3<0) {velocity3=0;}
+    velocity4-=0.5;
+    if (velocity4<0) {velocity4=0;}
+  }
+
+  // draw a circle at the mouse position with size proportional to speed
+  // fill(0);
+  // ellipse(x, y, speed * 10, speed * 10);
+
+  x1  = x;
+  y1  = y;
+
+}
+
+void receive(byte[] data, String ip, int port) {
+  // This function is called whenever a new message is received
+  String message = new String(data);
+  //println("Received from Python: " + message);
+  
+  // Parse the control number and value
+  String[] parts = split(message, ':');
+  int controlNumber = int(parts[0]);
+  int controlValue = int(parts[1]);
+
+
+  if(controlNumber == 3){
+   heightHandR = map(controlValue,0,127,0,100);    
+  }
+  if(controlNumber == 5){
+   x = map(controlValue,0,127,0,width);    
+  }
+  if(controlNumber == 6){
+   y = map(controlValue,0,127,0,width);    
+  }
+  if(controlNumber == 0){      
+   if (controlValue>10) {
+      rightHand=true;  
+    }else{
+      rightHand=false;
+    }
+  }
+  
+  // Now you can use controlNumber and controlValue as needed
+}
+int getCornerDirection(float vx, float vy) {
+  if (vx > 0 && vy < 0) return 2;   // TopRight
+  else if (vx < 0 && vy < 0) return 1;   // TopLeft
+  else if (vx > 0 && vy > 0) return 3;   // BottomRight
+  else if (vx < 0 && vy > 0) return 4;   // BottomLeft
+  else return 0;   // no direction
+}
+
+void mouseStopped() {
+  // find the direction with the highest count
+  int maxDirection  = 0;
+  int maxCount  = 0;
+  for (int i  = 0; i < directionCounts.length; i++) {
+    if (directionCounts[i] > maxCount) {
+      maxDirection  = i + 1;
+      maxCount  = directionCounts[i];
+    }
+  }
+
+  // update background color based on the most common direction
+  if (maxDirection == 1) bgColor  = color(255, 0, 0);   // red for TopLeft
+  else if (maxDirection == 2) bgColor  = color(0, 255, 0);   // green for TopRight
+  else if (maxDirection == 3) bgColor  = color(0, 0, 255);   // blue for BottomRight
+  else if (maxDirection == 4) bgColor  = color(255, 255, 0);   // yellow for BottomLeft
+
+  // reset direction counts
+  for (int i  = 0; i < directionCounts.length; i++) {
+    directionCounts[i]  = 0;
+  }
+}

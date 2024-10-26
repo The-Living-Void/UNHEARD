@@ -1,0 +1,561 @@
+import hypermedia.net.*;
+import dmxP512.*;
+import processing.serial.*;
+// osc
+import oscP5.*;
+import netP5.*;
+//timer?
+import java.util.Timer;
+import java.util.TimerTask;
+
+OscP5 oscP5;
+NetAddress ableton;
+
+boolean useOsc=true;
+
+//receivePy port
+int port = 5005;  // The port number should match the Python script
+float xR = 0;
+float yR = 0;
+float xL = 0;
+float yL = 0;
+boolean rightHand = false;
+boolean leftHand = false;
+float heightHandR = 0;
+float heightHandL = 0;
+
+hypermedia.net.UDP udp;
+
+boolean sendToDataCollect = true;
+hypermedia.net.UDP udp2;
+String ipS = "127.0.0.1"; // IP address of the receiver (localhost)
+int portS = 12348; // Port to send the data
+
+//dmx
+DmxP512 dmxOutput;
+int universeSize=128;
+boolean DMXPRO=false;
+String DMXPRO_PORT="/dev/tty.usbserial-EN272324";//case matters ! on windows port must be upper cased.
+int DMXPRO_BAUDRATE=115000;
+
+
+float x1R, y1R;   // mouse position
+float vxR, vyR;   
+float x1L, y1L;   // mouse position
+float vxL, vyL; 
+float turnR=0,turnL=0;
+float maxSpeed  = 2;   // speed threshold
+int[] directionCountsR  = new int[4];   // counts for each direction (TopLeft, TopRight, BottomRight, BottomLeft)
+int[] directionCountsL  = new int[4];   // counts for each direction (TopLeft, TopRight, BottomRight, BottomLeft)
+color bgColorR,bgColorL;   // background color
+boolean isMovingR  = false;   // flag to track if the mouse is moving
+boolean isMovingL  = false;   // flag to track if the mouse is moving
+int velocityR, velocity1R,velocity2R,velocity3R,velocity4R = 0;
+int velocityL, velocity1L,velocity2L,velocity3L,velocity4L = 0;
+int directionR=0,directionL=0;
+
+
+boolean triggeredUpL = false;
+boolean triggeredDownL = false;
+boolean triggeredUpR = false;
+boolean triggeredDownR = false;
+float prevHeightHandL = 0;
+float prevHeightHandR = 0;
+
+//timer
+long[] cooldownTimers = new long[2]; // Initialize cooldown timers for both hands
+
+float [] highestValues = {0, 0};
+float declineRate = 0.005; // Adjust this value to control the decline rate
+
+
+void setup() {
+  size(900,900);
+  udp = new hypermedia.net.UDP(this, port);
+  //udp.log(true);  // Enable logging to see incoming messages
+  udp.listen(true);  // Start listening to incoming messages
+
+  if (sendToDataCollect) {
+  udp2 = new hypermedia.net.UDP(this, 6000); // Specify a different port for the local client
+  udp2.log(false); // Will print activity to console  
+  }
+  
+
+  //dmx
+  dmxOutput=new DmxP512(this,universeSize,false);
+  if(DMXPRO){
+    dmxOutput.setupDmxPro(DMXPRO_PORT,DMXPRO_BAUDRATE);
+  }
+  //osc ableton
+  if (useOsc) {
+    oscP5 = new OscP5(this, 11001); // Initialize oscP5, listening on port 12000
+    ableton = new NetAddress("127.0.0.1", 11000); // Ableton Live's IP and port
+  }
+
+  // xR  = mouseX;
+  // yR  = mouseY;
+  vxR  = 0;
+  vyR  = 0;
+  vxL  = 0;
+  vyL  = 0;
+
+  for (int i  = 0; i < directionCountsR.length; i++) {
+    directionCountsR[i]  = 0;
+  }
+  for (int i  = 0; i < directionCountsL.length; i++) {
+    directionCountsL[i]  = 0;
+  }
+  bgColorR  = color(255);   // initial white background
+  bgColorL  = color(255);   // initial white background
+}
+
+void draw() {
+  // The draw loop is left emptyR as we're only listening for UDP messages
+  trackVel(xR,yR,xL,yL);
+  // trackVel(xL,yL);
+  if (DMXPRO) {
+  runDmx();  
+  }
+  
+  // background(bgColor);
+
+  fill(230,10);
+  noStroke();
+  rect(0, 0, width, height);
+
+  fill(bgColorR);
+  rect(width-20, height-20, 20, 20);
+  fill(bgColorL);
+  rect(width-40, height-20, 20, 20);
+
+  fill(200,50,0);
+  // println("velocityR: "+velocityR);
+  
+  runVelocity(velocityL,1);
+  runVelocity(velocityR,2);
+
+  ellipseMode(CENTER);
+  if (leftHand) {    
+  ellipse(xL,yL,heightHandL,heightHandL);  
+  }
+  fill(0,50,200);
+  if (rightHand) {
+  ellipse(xR,yR,heightHandR,heightHandR);  
+  }
+
+  if (leftHand==false&&rightHand==false) {
+    background(heightHandR);
+  }
+  if (sendToDataCollect) {
+    runDataSend();
+  }    
+
+  if (leftHand) {checkVelocityAndTrigger(heightHandL, prevHeightHandL, 3.0, this::leftHandUp, this::leftHandDown, new boolean[]{triggeredUpL, triggeredDownL}, cooldownTimers, 0);  }
+  if (rightHand) {checkVelocityAndTrigger(heightHandR, prevHeightHandR, 3.0, this::rightHandUp, this::rightHandDown, new boolean[]{triggeredUpR, triggeredDownR}, cooldownTimers, 1);}
+
+  // prevHeightHand = heightHand;
+  prevHeightHandL = heightHandL;
+  prevHeightHandR = heightHandR;
+
+}
+
+void runDataSend(){
+
+  String message = xR + "," + yR + "," + velocity1R + "," + heightHandR + "," + turnR + "," + xL + "," + yL + "," + velocity1L + "," + heightHandL + "," + turnL;
+  udp2.send(message, ipS, portS);
+
+}
+void runDmx(){
+
+  if (velocity1R>255) {velocity1R=255;}
+  if (velocity2R>255) {velocity2R=255;}
+  if (velocity3R>255) {velocity3R=255;}
+  if (velocity4R>255) {velocity4R=255;}
+    
+  dmxOutput.set(5,velocity1R);
+  dmxOutput.set(6,velocity1R);
+  dmxOutput.set(7,velocity1R);
+  dmxOutput.set(8,velocity1R);  
+  
+  dmxOutput.set(1,velocity4R);  
+  dmxOutput.set(2,velocity4R);  
+
+  // dmxOutput.set(11,velocity2R);
+  dmxOutput.set(11,velocity2R);
+  
+}
+
+float lerpAmount = 0.075; // Adjust this value to control the interpolation speed
+
+void trackVel(float xR,float yR,float xL,float yL){
+  vxR  = (xR - x1R) / 10.0;
+  vyR  = (yR - y1R) / 10.0;
+  vxL  = (xL - x1L) / 10.0;
+  vyL  = (yL - y1L) / 10.0;
+  
+  // println("right "+velocityR);
+  // println("left "+velocityL);
+  
+  float newVelocityR;
+  
+  float newVelocityL;
+
+  if (vxR > vyR) {
+    newVelocityR = abs(map(vxR, 0, 5, 0, 255));
+  } else {
+    newVelocityR = abs(map(vyR, 0, 5, 0, 255));
+  }
+  if (vxL > vyL) {
+    newVelocityL = abs(map(vxL, 0, 5, 0, 255));
+  } else {
+    newVelocityL = abs(map(vyL, 0, 5, 0, 255));
+  }
+
+  velocityR = int(lerp(velocityR, newVelocityR, lerpAmount));
+  velocityL = int(lerp(velocityL, newVelocityL, lerpAmount));
+
+
+  //shared velocityR
+  // check if speed exceeds threshold
+  float speedR  = sqrt(sq(vxR) + sq(vyR));
+  float speedL  = sqrt(sq(vxL) + sq(vyL));
+  
+  if (speedR > maxSpeed) {
+    isMovingR  = true;
+    isMovingR  = true;
+    directionR  = getCornerDirection(vxR, vyR);
+    if (directionR != 0) {
+      directionCountsR[directionR - 1]++;
+    }
+  } else if (isMovingR && speedR < maxSpeed) {
+    mouseStopped(0);
+    isMovingR  = false;
+    isMovingR  = false;
+    velocityR--;
+    if (velocityR<0) {
+      velocityR=0;
+      velocity1R=0;
+      velocity2R=0;
+      velocity3R=0;
+      velocity4R=0;
+    }
+  }
+  if (speedL > maxSpeed) {
+    isMovingL  = true;
+    isMovingL  = true;
+    directionL  = getCornerDirection(vxL, vyL);
+    if (directionL != 0) {
+      directionCountsL[directionL - 1]++;
+    }
+  } else if (isMovingL && speedL < maxSpeed) {
+    mouseStopped(1);
+    isMovingL  = false;
+    isMovingL  = false;
+    velocityL--;
+    if (velocityL<0) {
+      velocityL=0;
+      velocity1L=0;
+      velocity2L=0;
+      velocity3L=0;
+      velocity4L=0;
+    }
+  }
+
+    if (directionR==1) {      
+      velocity1R = velocityR;
+      velocity2R--;
+      if (velocity2R<0) {velocity2R=0;}
+      velocity3R--;
+      if (velocity3R<0) {velocity3R=0;}
+      velocity4R-=0.5;
+      if (velocity4R<0) {velocity4R=0;}
+    }else if (directionR==2) {      
+      velocity2R = velocityR;
+      velocity1R--;
+      if (velocity1R<0) {velocity1R=0;}
+      velocity3R--;
+      if (velocity3R<0) {velocity3R=0;}
+      velocity4R-=0.5;
+      if (velocity4R<0) {velocity4R=0;}
+    }else if (directionR==3) {
+      velocity3R = velocityR;
+      velocity1R--;
+      if (velocity1R<0) {velocity1R=0;}
+      velocity2R--;
+      if (velocity2R<0) {velocity2R=0;}
+      velocity4R-=0.5;
+      if (velocity4R<0) {velocity4R=0;}
+    }else if (directionR==4) {
+      velocity4R = velocityR*2;
+      velocity1R--;
+      if (velocity1R<0) {velocity1R=0;}
+      velocity2R--;
+      if (velocity2R<0) {velocity2R=0;}
+      velocity3R--;
+      if (velocity3R<0) {velocity3R=0;}
+    }else if (directionR==0) {
+      velocity1R--;
+      if (velocity1R<0) {velocity1R=0;}
+      velocity2R--;
+      if (velocity2R<0) {velocity2R=0;}
+      velocity3R--;
+      if (velocity3R<0) {velocity3R=0;}
+      velocity4R-=0.5;
+      if (velocity4R<0) {velocity4R=0;}
+    }
+
+    if (directionL==1) {      
+      velocity1L = velocityL;
+      velocity2L--;
+      if (velocity2L<0) {velocity2L=0;}
+      velocity3L--;
+      if (velocity3L<0) {velocity3L=0;}
+      velocity4L-=0.5;
+      if (velocity4L<0) {velocity4L=0;}
+    }else if (directionL==2) {      
+      velocity2L = velocityL;
+      velocity1L--;
+      if (velocity1L<0) {velocity1L=0;}
+      velocity3L--;
+      if (velocity3L<0) {velocity3L=0;}
+      velocity4L-=0.5;
+      if (velocity4L<0) {velocity4L=0;}
+    }else if (directionL==3) {
+      velocity3L = velocityL;
+      velocity1L--;
+      if (velocity1L<0) {velocity1L=0;}
+      velocity2L--;
+      if (velocity2L<0) {velocity2L=0;}
+      velocity4L-=0.5;
+      if (velocity4L<0) {velocity4L=0;}
+    }else if (directionL==4) {
+      velocity4L = velocityL*2;
+      velocity1L--;
+      if (velocity1L<0) {velocity1L=0;}
+      velocity2L--;
+      if (velocity2L<0) {velocity2L=0;}
+      velocity3L--;
+      if (velocity3L<0) {velocity3L=0;}
+    }else if (directionL==0) {
+      velocity1L--;
+      if (velocity1L<0) {velocity1L=0;}
+      velocity2L--;
+      if (velocity2L<0) {velocity2L=0;}
+      velocity3L--;
+      if (velocity3L<0) {velocity3L=0;}
+      velocity4L-=0.5;
+      if (velocity4L<0) {velocity4L=0;}
+    }
+
+
+  // draw a circle at the mouse position with size proportional to speed
+  // fill(0);
+  // ellipse(x, y, speed * 10, speed * 10);
+
+  x1R  = xR;
+  y1R  = yR;
+  x1L  = xL;
+  y1L  = yL;
+
+}
+
+void receive(byte[] data, String ip, int port) {
+  // This function is called whenever a new message is received
+  String message = new String(data);
+  //println("Received from Python: " + message);
+  
+  // Parse the control number and value
+  String[] parts = split(message, ':');
+  int controlNumber = int(parts[0]);
+  int controlValue = int(parts[1]);
+  //right
+  if(controlNumber == 3){
+   heightHandR = map(controlValue,0,127,0,100);    
+  }
+  if(controlNumber == 5){
+   xR = map(controlValue,0,127,0,width);    
+  }
+  if(controlNumber == 6){
+   yR = map(controlValue,0,127,0,width);    
+  }
+  if(controlNumber == 7){
+   turnR = map(controlValue,0,127,0,100);    
+  }
+
+  if(controlNumber == 0){      
+   if (controlValue>10) {
+      rightHand=true;  
+    }else{
+      rightHand=false;
+    }
+  }
+  //left
+  if(controlNumber == 13){
+   heightHandL = map(controlValue,0,127,0,100);    
+  }
+  if(controlNumber == 15){
+   xL = map(controlValue,0,127,0,width);    
+  }
+  if(controlNumber == 16){
+   yL = map(controlValue,0,127,0,width);    
+  }
+  if(controlNumber == 17){
+   turnL = map(controlValue,0,127,0,100);    
+  }
+  if(controlNumber == 10){      
+   if (controlValue>10) {
+      leftHand=true;  
+    }else{
+      leftHand=false;
+    }
+  }
+  
+  // Now you can use controlNumber and controlValue as needed
+}
+int getCornerDirection(float vxR, float vyR) {
+  if (vxR > 0 && vyR < 0) return 2;   // TopRight
+  else if (vxR < 0 && vyR < 0) return 1;   // TopLeft
+  else if (vxR > 0 && vyR > 0) return 3;   // BottomRight
+  else if (vxR < 0 && vyR > 0) return 4;   // BottomLeft
+  else return 0;   // no direction
+}
+
+void mouseStopped(int hand) {
+  // find the direction with the highest count
+  if (hand==0) {
+    int maxDirection  = 0;
+    int maxCount  = 0;
+    for (int i  = 0; i < directionCountsR.length; i++) {
+      if (directionCountsR[i] > maxCount) {
+        maxDirection  = i + 1;
+        maxCount  = directionCountsR[i];
+      }
+    }
+
+    // update background color based on the most common direction
+    if (maxDirection == 1) bgColorR  = color(255, 0, 0);   // red for TopLeft
+    else if (maxDirection == 2) bgColorR  = color(0, 255, 0);   // green for TopRight
+    else if (maxDirection == 3) bgColorR  = color(0, 0, 255);   // blue for BottomRight
+    else if (maxDirection == 4) bgColorR  = color(255, 255, 0);   // yellow for BottomLeft
+
+    // reset direction counts
+    for (int i  = 0; i < directionCountsR.length; i++) {
+      directionCountsR[i]  = 0;
+    }
+  }
+    if (hand==1) {
+
+      int maxDirection  = 0;
+      int maxCount  = 0;
+      for (int i  = 0; i < directionCountsL.length; i++) {
+        if (directionCountsL[i] > maxCount) {
+          maxDirection  = i + 1;
+          maxCount  = directionCountsL[i];
+        }
+    }
+
+    // update background color based on the most common direction
+    if (maxDirection == 1) bgColorL  = color(255, 0, 0);   // red for TopLeft
+    else if (maxDirection == 2) bgColorL  = color(0, 255, 0);   // green for TopRight
+    else if (maxDirection == 3) bgColorL  = color(0, 0, 255);   // blue for BottomRight
+    else if (maxDirection == 4) bgColorL  = color(255, 255, 0);   // yellow for BottomLeft
+
+    // reset direction counts
+    for (int i  = 0; i < directionCountsL.length; i++) {
+      directionCountsL[i]  = 0;
+    }
+  }
+  
+}
+
+void checkVelocityAndTrigger(float heightHand, float prevHeightHand, float threshold, Runnable actionUp, Runnable actionDown, boolean[] triggered, long[] cooldownTimers, int hand) {
+    float velocity = heightHand - prevHeightHand;
+
+    // println("velocity: "+velocity);
+    if (velocity > threshold && !triggered[0] && cooldownTimers[hand] <= System.currentTimeMillis()) {
+        actionUp.run();
+        triggered[0] = true;
+        // cooldownTimers[hand] = System.currentTimeMillis() + 50; // 1 second cooldown
+    } else if (velocity < -threshold && !triggered[1] && cooldownTimers[hand] <= System.currentTimeMillis()) {
+        actionDown.run();
+        triggered[1] = true;
+        cooldownTimers[hand] = System.currentTimeMillis() + 100; // 1 second cooldown
+    } else if (Math.abs(velocity) < threshold) {
+        triggered[0] = false;
+        triggered[1] = false;
+    }
+
+    prevHeightHand = heightHand;
+}
+
+void fireClip(int channel,int clip){
+  
+  OscMessage msg = new OscMessage("/live/clip/fire"); // OSC address pattern for playing a clip
+  msg.add(channel); // Track index (0-based, so 2 means track 3)  
+  msg.add(clip); // Clip slot index (0-based, so 2 means third row)    
+  oscP5.send(msg, ableton);
+  msg.clear();
+
+}
+
+void runVelocity(float velocityHere, int hand) {
+    float volumeAble = 0;
+
+    velocityHere = constrain(velocityHere, 0, 200);
+
+    if (hand == 1 || hand == 2) {
+        volumeAble = map(velocityHere, 0, 200, 0, 1);
+
+        // Update the highest value for the corresponding hand
+        if (volumeAble > highestValues[hand - 1]) {
+            highestValues[hand - 1] = volumeAble;
+        }
+
+        // Apply the decline
+        highestValues[hand - 1] -= declineRate;
+        if (highestValues[hand - 1] < 0) {
+            highestValues[hand - 1] = 0;
+        }
+
+        volumeAble = highestValues[hand - 1];
+    }
+
+    OscMessage msg = new OscMessage("/live/track/set/volume"); // OSC address pattern for playing a clip
+    msg.add(hand - 1); // Track index (0-based, so 2 means track 3)
+    msg.add(volumeAble); // Clip slot index (0-based, so 2 means third row)
+
+    oscP5.send(msg, ableton);
+    msg.clear();
+}
+
+void leftHandUp() {
+  // println("Left hand moved up!");
+}
+
+void leftHandDown() {
+  // println("x L "+x1L);
+  // println("y L "+y1L);
+  if (y1L<500) {
+  fireClip(2,1);  
+  }else {
+  fireClip(2,2);  
+  }
+  
+}
+
+void rightHandUp() {
+  // println("Right hand moved up!");
+}
+
+void rightHandDown() {
+  // println("Right hand moved down!");
+  // println("x R "+x1R);
+  // println("y R "+y1R);
+  if (y1R<500) {
+  fireClip(2,3);  
+  }else {
+  fireClip(2,4);  
+  }
+
+  // fireClip(2,3);
+}
