@@ -4,6 +4,8 @@ These are all the files used for the installation UNHEARD commisioned by Noorder
 It has the installation running files (processing) & The Ai training files (the .py files)
 ive put further descriptions in the seperate files.
 
+Please keep in mind: This is very much v0.1 and I will update once i get things running more smoothly. This is very much a patchwork of different work-arounds and pragmatic time pressured imperfect solutions. 
+
 Here are a few prerequisites:
 An Ultraleap Leap Motion hand tracker.
 You need GECO an Leap motion to midi software.
